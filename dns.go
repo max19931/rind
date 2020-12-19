@@ -1,9 +1,4 @@
-// Copyright 2018 The Rind Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
-
 package rind
-
 import (
 	"errors"
 	"log"
@@ -12,40 +7,28 @@ import (
 
 	"golang.org/x/net/dns/dnsmessage"
 )
-
-// DNSServer will do Listen, Query and Send.
 type DNSServer interface {
 	Listen()
 	Query(Packet)
 }
-
-// DNSService is an implementation of DNSServer interface.
 type DNSService struct {
 	conn       *net.UDPConn
 	book       store
 	memo       addrBag
 	forwarders []net.UDPAddr
 }
-
-// Packet carries DNS packet payload and sender address.
 type Packet struct {
 	addr    net.UDPAddr
 	message dnsmessage.Message
 }
-
 const (
-	// DNS server default port
 	udpPort int = 53
-	// DNS packet max length
 	packetLen int = 512
 )
-
 var (
 	errTypeNotSupport = errors.New("type not support")
 	errIPInvalid      = errors.New("invalid IP address")
 )
-
-// Listen starts a DNS server on port 53
 func (s *DNSService) Listen() {
 	var err error
 	s.conn, err = net.ListenUDP("udp", &net.UDPAddr{Port: udpPort})
@@ -73,10 +56,7 @@ func (s *DNSService) Listen() {
 		go s.Query(Packet{*addr, m})
 	}
 }
-
-// Query lookup answers for DNS message.
 func (s *DNSService) Query(p Packet) {
-	// got response from forwarder, send it back to client
 	if p.message.Header.Response {
 		pKey := pString(p)
 		if addrs, ok := s.memo.get(pKey); ok {
@@ -88,25 +68,18 @@ func (s *DNSService) Query(p Packet) {
 		}
 		return
 	}
-
-	// was checked before entering this routine
 	q := p.message.Questions[0]
-
-	// answer the question
 	val, ok := s.book.get(qString(q))
-
 	if ok {
 		p.message.Answers = append(p.message.Answers, val...)
 		go sendPacket(s.conn, p.message, p.addr)
 	} else {
-		// forwarding
 		for i := 0; i < len(s.forwarders); i++ {
 			s.memo.set(pString(p), p.addr)
 			go sendPacket(s.conn, p.message, s.forwarders[i])
 		}
 	}
 }
-
 func sendPacket(conn *net.UDPConn, message dnsmessage.Message, addr net.UDPAddr) {
 	packed, err := message.Pack()
 	if err != nil {
@@ -119,8 +92,6 @@ func sendPacket(conn *net.UDPConn, message dnsmessage.Message, addr net.UDPAddr)
 		log.Println(err)
 	}
 }
-
-// New setups a DNSService, rwDirPath is read-writable directory path for storing dns records.
 func New(rwDirPath string, forwarders []net.UDPAddr) DNSService {
 	return DNSService{
 		book:       store{data: make(map[string]entry), rwDirPath: rwDirPath},
@@ -128,8 +99,6 @@ func New(rwDirPath string, forwarders []net.UDPAddr) DNSService {
 		forwarders: forwarders,
 	}
 }
-
-// Start conveniently init every parts of DNS service.
 func Start(rwDirPath string, forwarders []net.UDPAddr) *DNSService {
 	s := New(rwDirPath, forwarders)
 	s.book.load()
@@ -175,7 +144,6 @@ func (s *DNSService) remove(key string, r *dnsmessage.Resource) bool {
 	}
 	return ok
 }
-
 func toResource(req request) (dnsmessage.Resource, error) {
 	rName, err := dnsmessage.NewName(req.Host)
 	none := dnsmessage.Resource{}
@@ -208,32 +176,6 @@ func toResource(req request) (dnsmessage.Resource, error) {
 			return none, err
 		}
 		rBody = &dnsmessage.CNAMEResource{CNAME: cname}
-	case "SOA":
-		rType = dnsmessage.TypeSOA
-		soa := req.SOA
-		soaNS, err := dnsmessage.NewName(soa.NS)
-		if err != nil {
-			return none, err
-		}
-		soaMBox, err := dnsmessage.NewName(soa.MBox)
-		if err != nil {
-			return none, err
-		}
-		rBody = &dnsmessage.SOAResource{NS: soaNS, MBox: soaMBox, Serial: soa.Serial, Refresh: soa.Refresh, Retry: soa.Retry, Expire: soa.Expire}
-	case "PTR":
-		rType = dnsmessage.TypePTR
-		ptr, err := dnsmessage.NewName(req.Data)
-		if err != nil {
-			return none, err
-		}
-		rBody = &dnsmessage.PTRResource{PTR: ptr}
-	case "MX":
-		rType = dnsmessage.TypeMX
-		mxName, err := dnsmessage.NewName(req.MX.MX)
-		if err != nil {
-			return none, err
-		}
-		rBody = &dnsmessage.MXResource{Pref: req.MX.Pref, MX: mxName}
 	case "AAAA":
 		rType = dnsmessage.TypeAAAA
 		ip := net.ParseIP(req.Data)
@@ -251,10 +193,6 @@ func toResource(req request) (dnsmessage.Resource, error) {
 			return none, err
 		}
 		rBody = &dnsmessage.SRVResource{Priority: srv.Priority, Weight: srv.Weight, Port: srv.Port, Target: srvTarget}
-	case "TXT":
-		fallthrough
-	case "OPT":
-		fallthrough
 	default:
 		return none, errTypeNotSupport
 	}
@@ -278,20 +216,10 @@ func toRType(sType string) dnsmessage.Type {
 		return dnsmessage.TypeNS
 	case "CNAME":
 		return dnsmessage.TypeCNAME
-	case "SOA":
-		return dnsmessage.TypeSOA
-	case "PTR":
-		return dnsmessage.TypePTR
-	case "MX":
-		return dnsmessage.TypeMX
 	case "AAAA":
 		return dnsmessage.TypeAAAA
 	case "SRV":
 		return dnsmessage.TypeSRV
-	case "TXT":
-		return dnsmessage.TypeTXT
-	case "OPT":
-		return dnsmessage.TypeOPT
 	default:
 		return 0
 	}
